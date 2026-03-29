@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamTV - Movies & Shows</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Source Sans 3', 'sans-serif'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    * { font-family: 'Source Sans 3', sans-serif; }
+    body { background: #0a0a0a; color: white; min-height: 100vh; overflow-x: hidden; }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+    
+    /* Glass effect */
+    .glass { background: rgba(255,255,255,0.1); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); }
+    .glass-dark { background: rgba(0,0,0,0.6); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+    
+    /* Card hover */
+    .media-card { transition: all 0.5s cubic-bezier(0.25, 0.1, 0.25, 1); }
+    .media-card:hover { transform: scale(1.15); z-index: 50; }
+    .media-card .card-overlay { opacity: 0; transition: opacity 0.4s ease; }
+    .media-card:hover .card-overlay { opacity: 1; }
+    .media-card:hover .card-image { filter: brightness(0.7); }
+    
+    /* Content row hover effects */
+    .content-row:hover .media-card:not(:hover) { opacity: 0.5; filter: brightness(0.7); }
+    
+    /* Page transitions */
+    .page-enter { animation: pageEnter 0.4s ease forwards; }
+    .page-exit { animation: pageExit 0.3s ease forwards; }
+    @keyframes pageEnter { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pageExit { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-20px); } }
+    
+    /* Fade in */
+    .fade-in { animation: fadeIn 0.6s ease forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+    
+    /* Pulse glow */
+    .pulse-glow { animation: pulseGlow 3s ease-in-out infinite; }
+    @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 20px rgba(255,255,255,0.1); } 50% { box-shadow: 0 0 30px rgba(255,255,255,0.2); } }
+    
+    /* Nav active indicator */
+    .nav-btn { position: relative; transition: all 0.3s ease; }
+    .nav-btn.active::after { content: ''; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; background: white; border-radius: 50%; }
+    .nav-btn:hover { background: rgba(255,255,255,0.15); }
+    
+    /* Hide scrollbar for content rows */
+    .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .hide-scrollbar::-webkit-scrollbar { display: none; }
+    
+    /* Loading spinner */
+    .spinner { border: 3px solid rgba(255,255,255,0.1); border-top-color: white; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  
+  <script>
+    // TMDB API Configuration
+    const TMDB_API_KEY = '1fd7b0c37fce4c7e5a5a7b2e509b9e7e';
+    const TMDB_BASE = 'https://api.themoviedb.org/3';
+    const IMG_BASE = 'https://image.tmdb.org/t/p';
+    
+    // State
+    let currentPage = 'home';
+    let watchlist = JSON.parse(localStorage.getItem('watchlist') || '[]');
+    let continueWatching = JSON.parse(localStorage.getItem('continueWatching') || '[]');
+    let currentWatch = null;
+    let searchOpen = false;
+    let searchResults = [];
+    let heroData = null;
+    let trendingMovies = [];
+    let trendingSeries = [];
+    let popularMovies = [];
+    let topRatedMovies = [];
+    let popularSeries = [];
+    let topRatedSeries = [];
+    let seasonDetails = null;
+    let selectedSeason = 1;
+    let selectedEpisode = 1;
+    let episodeSearch = '';
+    
+    // TMDB API Functions
+    async function fetchTMDB(endpoint) {
+      const res = await fetch(`${TMDB_BASE}${endpoint}${endpoint.includes('?') ? '&' : '?'}api_key=${TMDB_API_KEY}`);
+      return res.json();
+    }
+    
+    async function searchMulti(query) {
+      const data = await fetchTMDB(`/search/multi?query=${encodeURIComponent(query)}`);
+      return data.results?.filter(r => r.media_type === 'movie' || r.media_type === 'tv') || [];
+    }
+    
+    async function getSeasonDetails(tvId, seasonNum) {
+      return fetchTMDB(`/tv/${tvId}/season/${seasonNum}`);
+    }
+    
+    async function getTVDetails(tvId) {
+      return fetchTMDB(`/tv/${tvId}`);
+    }
+    
+    async function getMovieDetails(movieId) {
+      return fetchTMDB(`/movie/${movieId}`);
+    }
+    
+    function getVidsrcUrl(type, id, season, episode) {
+      if (type === 'tv' && season && episode) {
+        return `https://vidfast.pro/tv/${id}/${season}/${episode}`;
+      }
+      return `https://vidfast.pro/${type}/${id}`;
+    }
+    
+    // Watchlist Functions
+    function isInWatchlist(id, type) {
+      return watchlist.some(item => item.id === id && item.type === type);
+    }
+    
+    function toggleWatchlist(item) {
+      const exists = isInWatchlist(item.id, item.type);
+      if (exists) {
+        watchlist = watchlist.filter(w => !(w.id === item.id && w.type === item.type));
+      } else {
+        watchlist.push(item);
+      }
+      localStorage.setItem('watchlist', JSON.stringify(watchlist));
+      render();
+    }
+    
+    function updateContinueWatching(item) {
+      const existing = continueWatching.findIndex(c => c.id === item.id && c.type === item.type);
+      if (existing >= 0) {
+        continueWatching[existing] = { ...continueWatching[existing], ...item, timestamp: Date.now() };
+      } else {
+        continueWatching.unshift({ ...item, progress: 10 + Math.random() * 60, timestamp: Date.now() });
+      }
+      continueWatching = continueWatching.slice(0, 20);
+      localStorage.setItem('continueWatching', JSON.stringify(continueWatching));
+    }
+    
+    // Navigation
+    function navigateTo(page, data = null) {
+      const content = document.getElementById('page-content');
+      if (content) {
+        content.classList.remove('page-enter');
+        content.classList.add('page-exit');
+      }
+      setTimeout(() => {
+        currentPage = page;
+        currentWatch = data;
+        render();
+      }, 200);
+    }
+    
+    // Play content
+    async function playContent(item) {
+      updateContinueWatching(item);
+      if (item.type === 'tv') {
+        const details = await getTVDetails(item.id);
+        currentWatch = { ...item, details, seasons: details.seasons?.filter(s => s.season_number > 0) || [] };
+        selectedSeason = 1;
+        selectedEpisode = 1;
+        seasonDetails = await getSeasonDetails(item.id, 1);
+      } else {
+        currentWatch = item;
+      }
+      navigateTo('watch', currentWatch);
+    }
+    
+    // Load initial data
+    async function loadData() {
+      try {
+        const [trending, trendingTV, popular, topRated, popTV, topTV] = await Promise.all([
+          fetchTMDB('/trending/movie/week'),
+          fetchTMDB('/trending/tv/week'),
+          fetchTMDB('/movie/popular'),
+          fetchTMDB('/movie/top_rated'),
+          fetchTMDB('/tv/popular'),
+          fetchTMDB('/tv/top_rated')
+        ]);
+        
+        trendingMovies = trending.results || [];
+        trendingSeries = trendingTV.results || [];
+        popularMovies = popular.results || [];
+        topRatedMovies = topRated.results || [];
+        popularSeries = popTV.results || [];
+        topRatedSeries = topTV.results || [];
+        
+        // Pick a random hero from trending
+        const allTrending = [...trendingMovies.slice(0, 5), ...trendingSeries.slice(0, 5)];
+        heroData = allTrending[Math.floor(Math.random() * allTrending.length)];
+        
+        render();
+      } catch (err) {
+        console.error('Failed to load data:', err);
+      }
+    }
+    
+    // Components
+    function renderMediaCard(item, type, showProgress = false, progress = 0) {
+      const title = item.title || item.name;
+      const year = (item.release_date || item.first_air_date || '').slice(0, 4);
+      const poster = item.poster_path ? `${IMG_BASE}/w500${item.poster_path}` : '';
+      const inWatchlist = isInWatchlist(item.id, type);
+      
+      return `
+        <div class="media-card flex-shrink-0 w-[220px] cursor-pointer rounded-2xl overflow-hidden relative group" 
+             onclick="playContent({id: ${item.id}, type: '${type}', title: '${title.replace(/'/g, "\\'")}', poster_path: '${item.poster_path || ''}', backdrop_path: '${item.backdrop_path || ''}', vote_average: ${item.vote_average || 0}})">
+          <div class="aspect-[2/3] bg-neutral-800 relative overflow-hidden">
+            ${poster ? `<img src="${poster}" alt="${title}" class="card-image w-full h-full object-cover transition-all duration-500">` : 
+              `<div class="w-full h-full flex items-center justify-center text-neutral-500 font-semibold">${title}</div>`}
+            
+            <!-- Overlay on hover -->
+            <div class="card-overlay absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent flex flex-col justify-end p-4">
+              <h3 class="font-bold text-lg leading-tight mb-1">${title}</h3>
+              <div class="flex items-center gap-2 text-sm text-neutral-300">
+                <span>${year}</span>
+                ${item.vote_average ? `<span class="bg-yellow-500 text-black px-1.5 py-0.5 rounded text-xs font-bold">${item.vote_average.toFixed(1)}</span>` : ''}
+              </div>
+              <div class="flex items-center gap-2 mt-3">
+                <button class="w-10 h-10 rounded-full bg-white flex items-center justify-center hover:scale-110 transition-transform">
+                  <svg class="w-5 h-5 text-black ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                </button>
+                <button onclick="event.stopPropagation(); toggleWatchlist({id: ${item.id}, type: '${type}', title: '${title.replace(/'/g, "\\'")}', poster_path: '${item.poster_path || ''}', backdrop_path: '${item.backdrop_path || ''}', vote_average: ${item.vote_average || 0}})" 
+                        class="w-10 h-10 rounded-full ${inWatchlist ? 'bg-white text-black' : 'bg-white/20 text-white'} flex items-center justify-center hover:scale-110 transition-transform">
+                  ${inWatchlist ? 
+                    '<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>' :
+                    '<svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>'}
+                </button>
+              </div>
+            </div>
+            
+            ${showProgress ? `
+              <div class="absolute bottom-0 left-0 right-0 h-1 bg-neutral-700">
+                <div class="h-full bg-white" style="width: ${progress}%"></div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderContentRow(title, items, type, delay = 0) {
+      if (!items?.length) return '';
+      return `
+        <div class="mb-10 fade-in" style="animation-delay: ${delay}ms">
+          <h2 class="text-2xl font-bold mb-4 px-12">${title}</h2>
+          <div class="content-row relative group">
+            <div class="flex gap-4 overflow-x-auto hide-scrollbar px-12 py-4">
+              ${items.map(item => renderMediaCard(item, type)).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderHero() {
+      if (!heroData) return '<div class="h-[70vh] flex items-center justify-center"><div class="spinner"></div></div>';
+      
+      const title = heroData.title || heroData.name;
+      const year = (heroData.release_date || heroData.first_air_date || '').slice(0, 4);
+      const type = heroData.title ? 'movie' : 'tv';
+      const backdrop = heroData.backdrop_path ? `${IMG_BASE}/original${heroData.backdrop_path}` : '';
+      const inWatchlist = isInWatchlist(heroData.id, type);
+      
+      return `
+        <div class="relative h-[75vh] overflow-hidden">
+          ${backdrop ? `<img src="${backdrop}" alt="${title}" class="absolute inset-0 w-full h-full object-cover">` : ''}
+          <div class="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent"></div>
+          <div class="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-transparent to-transparent"></div>
+          
+          <div class="absolute bottom-32 left-12 max-w-2xl fade-in">
+            <h1 class="text-6xl font-extrabold mb-4 tracking-tight" style="text-shadow: 2px 2px 20px rgba(0,0,0,0.8)">${title}</h1>
+            <div class="flex items-center gap-4 mb-6">
+              <span class="text-xl text-neutral-300 font-medium">${year}</span>
+              ${heroData.vote_average ? `<span class="bg-yellow-500 text-black px-2 py-1 rounded-lg text-sm font-bold">${heroData.vote_average.toFixed(1)}</span>` : ''}
+            </div>
+            <div class="flex items-center gap-4">
+              <button onclick="playContent({id: ${heroData.id}, type: '${type}', title: '${title.replace(/'/g, "\\'")}', poster_path: '${heroData.poster_path || ''}', backdrop_path: '${heroData.backdrop_path || ''}', vote_average: ${heroData.vote_average || 0}})" 
+                      class="flex items-center gap-3 px-8 py-4 bg-white/20 hover:bg-white/30 rounded-full transition-all hover:scale-105 glass">
+                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <span class="font-semibold text-lg">Play</span>
+              </button>
+              <button onclick="toggleWatchlist({id: ${heroData.id}, type: '${type}', title: '${title.replace(/'/g, "\\'")}', poster_path: '${heroData.poster_path || ''}', backdrop_path: '${heroData.backdrop_path || ''}', vote_average: ${heroData.vote_average || 0}})" 
+                      class="w-14 h-14 rounded-full ${inWatchlist ? 'bg-white text-black' : 'bg-white/20 text-white'} flex items-center justify-center hover:scale-110 transition-all glass">
+                ${inWatchlist ? 
+                  '<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>' :
+                  '<svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>'}
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function renderContinueWatching() {
+      if (!continueWatching.length) return '';
+      return `
+        <div class="mb-10 -mt-20 relative z-10 fade-in">
+          <h2 class="text-2xl font-bold mb-4 px-12">Continue Watching</h2>
+          <div class="content-row">
+            <div class="flex gap-4 overflow-x-auto hide-scrollbar px-12 py-4">
+              ${continueWatching.map(item => renderMediaCard(item, item.type, true, item.progress || 30)).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Pages
+    function renderHomePage() {
+      return `
+        ${renderHero()}
+        <div class="relative z-10 pb-32">
+          ${renderContinueWatching()}
+          ${renderContentRow('Trending Movies', trendingMovies, 'movie', 100)}
+          ${renderContentRow('Trending Series', trendingSeries, 'tv', 200)}
+          ${renderContentRow('Popular Movies', popularMovies, 'movie', 300)}
+          ${renderContentRow('Top Rated Series', topRatedSeries, 'tv', 400)}
+        </div>
+      `;
+    }
+    
+    function renderMoviesPage() {
+      return `
+        <div class="pt-20 pb-32">
+          <h1 class="text-4xl font-extrabold px-12 mb-8 fade-in">Movies</h1>
+          ${renderContentRow('Trending Now', trendingMovies, 'movie', 100)}
+          ${renderContentRow('Popular', popularMovies, 'movie', 200)}
+          ${renderContentRow('Top Rated', topRatedMovies, 'movie', 300)}
+        </div>
+      `;
+    }
+    
+    function renderSeriesPage() {
+      return `
+        <div class="pt-20 pb-32">
+          <h1 class="text-4xl font-extrabold px-12 mb-8 fade-in">Series</h1>
+          ${renderContentRow('Trending Now', trendingSeries, 'tv', 100)}
+          ${renderContentRow('Popular', popularSeries, 'tv', 200)}
+          ${renderContentRow('Top Rated', topRatedSeries, 'tv', 300)}
+        </div>
+      `;
+    }
+    
+    function renderWatchlistPage() {
+      return `
+        <div class="pt-20 pb-32 px-12">
+          <h1 class="text-4xl font-extrabold mb-8 fade-in">My Watchlist</h1>
+          ${watchlist.length ? `
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+              ${watchlist.map((item, i) => `
+                <div class="fade-in" style="animation-delay: ${i * 50}ms">
+                  ${renderMediaCard(item, item.type)}
+                </div>
+              `).join('')}
+            </div>
+          ` : `
+            <div class="flex flex-col items-center justify-center h-[50vh] text-neutral-500">
+              <svg class="w-24 h-24 mb-4" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              <p class="text-xl font-medium">Your watchlist is empty</p>
+              <p class="text-neutral-600 mt-2">Add movies and shows to watch later</p>
+            </div>
+          `}
+        </div>
+      `;
+    }
+    
+    function renderWatchPage() {
+      if (!currentWatch) return '<div class="h-screen flex items-center justify-center"><div class="spinner"></div></div>';
+      
+      const title = currentWatch.title || currentWatch.name;
+      const isTV = currentWatch.type === 'tv';
+      const videoUrl = getVidsrcUrl(currentWatch.type, currentWatch.id, isTV ? selectedSeason : null, isTV ? selectedEpisode : null);
+      
+      const episodes = seasonDetails?.episodes || [];
+      const filteredEpisodes = episodes.filter(ep => {
+        if (!episodeSearch) return true;
+        const search = episodeSearch.toLowerCase();
+        return ep.name.toLowerCase().includes(search) || ep.episode_number.toString().includes(search);
+      });
+      
+      return `
+        <div class="min-h-screen bg-black">
+          <!-- Back button -->
+          <button onclick="navigateTo('home')" class="fixed top-6 left-6 z-50 w-12 h-12 rounded-full glass flex items-center justify-center hover:bg-white/20 transition-all">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
+          </button>
+          
+          <!-- Video Player -->
+          <div class="w-full aspect-video bg-black">
+            <iframe src="${videoUrl}" class="w-full h-full" allowfullscreen allow="autoplay; fullscreen"></iframe>
+          </div>
+          
+          <!-- Info -->
+          <div class="p-8">
+            <h1 class="text-3xl font-bold mb-2">${title}</h1>
+            ${isTV ? `<p class="text-neutral-400 text-lg">Season ${selectedSeason} - Episode ${selectedEpisode}</p>` : ''}
+            
+            ${isTV && currentWatch.seasons?.length ? `
+              <!-- Season/Episode Selector -->
+              <div class="mt-8">
+                <div class="flex items-center gap-4 mb-6 flex-wrap">
+                  <span class="font-semibold text-lg">Season:</span>
+                  <div class="flex gap-2 flex-wrap">
+                    ${currentWatch.seasons.map(s => `
+                      <button onclick="changeSeason(${s.season_number})" 
+                              class="px-4 py-2 rounded-full ${selectedSeason === s.season_number ? 'bg-white text-black' : 'bg-white/10 hover:bg-white/20'} font-medium transition-all">
+                        ${s.season_number}
+                      </button>
+                    `).join('')}
+                  </div>
+                </div>
+                
+                <!-- Episode Search -->
+                <div class="mb-4">
+                  <input type="text" 
+                         placeholder="Search episodes by name or number..." 
+                         value="${episodeSearch}"
+                         oninput="episodeSearch = this.value; render()"
+                         class="w-full max-w-md px-4 py-3 rounded-xl bg-white/10 border border-white/10 focus:border-white/30 focus:outline-none transition-all font-medium">
+                </div>
+                
+                <!-- Episodes Grid -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[500px] overflow-y-auto pr-2">
+                  ${filteredEpisodes.length ? filteredEpisodes.map(ep => `
+                    <button onclick="selectEpisode(${ep.episode_number})" 
+                            class="text-left p-4 rounded-xl ${selectedEpisode === ep.episode_number ? 'bg-white text-black' : 'bg-white/5 hover:bg-white/10'} transition-all group">
+                      <div class="flex items-start gap-3">
+                        <span class="text-2xl font-bold ${selectedEpisode === ep.episode_number ? 'text-black' : 'text-white/50'}">${ep.episode_number}</span>
+                        <div class="flex-1 min-w-0">
+                          <h3 class="font-semibold truncate">${ep.name}</h3>
+                          ${ep.runtime ? `<span class="text-sm ${selectedEpisode === ep.episode_number ? 'text-black/60' : 'text-white/50'}">${ep.runtime} min</span>` : ''}
+                        </div>
+                      </div>
+                    </button>
+                  `).join('') : `
+                    <div class="col-span-full text-center py-8 text-neutral-500">No episodes found</div>
+                  `}
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    async function changeSeason(num) {
+      selectedSeason = num;
+      selectedEpisode = 1;
+      seasonDetails = await getSeasonDetails(currentWatch.id, num);
+      render();
+    }
+    
+    function selectEpisode(num) {
+      selectedEpisode = num;
+      updateContinueWatching(currentWatch);
+      render();
+    }
+    
+    // Search
+    async function handleSearch(query) {
+      if (query.length < 2) {
+        searchResults = [];
+        render();
+        return;
+      }
+      searchResults = await searchMulti(query);
+      render();
+    }
+    
+    function renderSearchDropdown() {
+      if (!searchOpen) return '';
+      
+      return `
+        <div class="fixed inset-0 z-[100]" onclick="searchOpen = false; render()">
+          <div class="absolute bottom-24 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4" onclick="event.stopPropagation()">
+            <div class="glass rounded-2xl overflow-hidden shadow-2xl">
+              <div class="p-4">
+                <input type="text" 
+                       id="search-input"
+                       placeholder="Search movies and shows..." 
+                       oninput="handleSearch(this.value)"
+                       class="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/10 focus:border-white/30 focus:outline-none text-lg font-medium">
+              </div>
+              ${searchResults.length ? `
+                <div class="max-h-80 overflow-y-auto">
+                  ${searchResults.slice(0, 10).map(item => {
+                    const title = item.title || item.name;
+                    const year = (item.release_date || item.first_air_date || '').slice(0, 4);
+                    const type = item.media_type;
+                    return `
+                      <button onclick="searchOpen = false; playContent({id: ${item.id}, type: '${type}', title: '${title.replace(/'/g, "\\'")}', poster_path: '${item.poster_path || ''}', backdrop_path: '${item.backdrop_path || ''}', vote_average: ${item.vote_average || 0}})" 
+                              class="w-full flex items-center gap-4 p-4 hover:bg-white/10 transition-all text-left">
+                        <div class="w-12 h-16 rounded-lg bg-neutral-800 overflow-hidden flex-shrink-0">
+                          ${item.poster_path ? `<img src="${IMG_BASE}/w200${item.poster_path}" class="w-full h-full object-cover">` : ''}
+                        </div>
+                        <div class="flex-1 min-w-0">
+                          <h3 class="font-semibold truncate">${title}</h3>
+                          <p class="text-sm text-neutral-400">${year} - ${type === 'movie' ? 'Movie' : 'Series'}</p>
+                        </div>
+                      </button>
+                    `;
+                  }).join('')}
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Navigation Bar
+    function renderNavBar() {
+      if (currentPage === 'watch') return '';
+      
+      const tabs = [
+        { id: 'home', label: 'Home' },
+        { id: 'movies', label: 'Movies' },
+        { id: 'series', label: 'Series' },
+        { id: 'watchlist', label: 'Watchlist' }
+      ];
+      
+      return `
+        <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+          <nav class="glass rounded-full px-2 py-2 flex items-center justify-center gap-1 pulse-glow">
+            ${tabs.map(tab => `
+              <button onclick="navigateTo('${tab.id}')" 
+                      class="nav-btn px-6 py-3 rounded-full font-semibold transition-all ${currentPage === tab.id ? 'bg-white text-black active' : 'text-white hover:bg-white/10'}">
+                ${tab.label}
+              </button>
+            `).join('')}
+            
+            <div class="w-px h-8 bg-white/20 mx-2"></div>
+            
+            <button onclick="searchOpen = true; render(); setTimeout(() => document.getElementById('search-input')?.focus(), 100)" 
+                    class="nav-btn w-12 h-12 rounded-full flex items-center justify-center hover:bg-white/10 transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              </svg>
+            </button>
+          </nav>
+        </div>
+      `;
+    }
+    
+    // Main render
+    function render() {
+      let pageContent = '';
+      switch (currentPage) {
+        case 'home': pageContent = renderHomePage(); break;
+        case 'movies': pageContent = renderMoviesPage(); break;
+        case 'series': pageContent = renderSeriesPage(); break;
+        case 'watchlist': pageContent = renderWatchlistPage(); break;
+        case 'watch': pageContent = renderWatchPage(); break;
+      }
+      
+      document.getElementById('app').innerHTML = `
+        <div id="page-content" class="page-enter">
+          ${pageContent}
+        </div>
+        ${renderNavBar()}
+        ${renderSearchDropdown()}
+      `;
+    }
+    
+    // Initialize
+    loadData();
+    render();
+  </script>
+</body>
+</html>
